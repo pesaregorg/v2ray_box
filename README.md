@@ -104,6 +104,87 @@ your_app/
 
 **Requirements:** minSdk 24, JDK 17
 
+### Android — Required Manifest & Gradle Settings
+
+The `example` app includes a few Android settings that are required for stable VPN/proxy behavior. Add them in your own app too.
+
+1. Add `tools` namespace and required permissions in `android/app/src/main/AndroidManifest.xml`:
+
+```xml
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+</manifest>
+```
+
+2. In the same manifest, set cleartext/target attributes and register both services:
+
+```xml
+<application
+    android:usesCleartextTraffic="true"
+    tools:targetApi="31"
+    ...>
+
+    <service
+        android:name="com.example.v2ray_box.bg.VPNService"
+        android:exported="false"
+        android:foregroundServiceType="specialUse"
+        android:permission="android.permission.BIND_VPN_SERVICE">
+        <intent-filter>
+            <action android:name="android.net.VpnService" />
+        </intent-filter>
+        <property
+            android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+            android:value="vpn" />
+    </service>
+
+    <service
+        android:name="com.example.v2ray_box.bg.ProxyService"
+        android:exported="false"
+        android:foregroundServiceType="specialUse">
+        <property
+            android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+            android:value="proxy" />
+    </service>
+</application>
+```
+
+Notes:
+- `android:usesCleartextTraffic="true"` is needed for local HTTP endpoints used by the plugin (for example `http://127.0.0.1:9090` sing-box Clash API and common HTTP ping URLs).
+- `QUERY_ALL_PACKAGES` is required only if you use Per-App Proxy.
+- Keep `android:permission="android.permission.BIND_VPN_SERVICE"` on `VPNService`.
+
+3. Enable multidex in `android/app/build.gradle.kts`:
+
+```kotlin
+android {
+    defaultConfig {
+        multiDexEnabled = true
+    }
+}
+```
+
+If you use Groovy (`build.gradle`):
+
+```groovy
+android {
+    defaultConfig {
+        multiDexEnabled true
+    }
+}
+```
+
 ### iOS — sing-box (default core)
 
 iOS uses the **HiddifyCore.xcframework** (which wraps sing-box) and runs as a VPN via `NetworkExtension` (PacketTunnel).
