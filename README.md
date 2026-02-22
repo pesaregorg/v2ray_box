@@ -46,25 +46,7 @@ dependencies:
 your_app/android/app/libs/libv2ray.aar
 ```
 
-3. Add to `android/app/build.gradle` (or `build.gradle.kts`):
-
-```groovy
-dependencies {
-    implementation fileTree(dir: 'libs', include: ['*.aar'])
-}
-```
-
-4. Enable `useLegacyPackaging` for JNI libs in `android/app/build.gradle`:
-
-```groovy
-android {
-    packaging {
-        jniLibs {
-            useLegacyPackaging = true
-        }
-    }
-}
-```
+3. Continue with the shared Android manifest/Gradle section below (`Android — Required Manifest & Gradle Settings`) to add required build settings.
 
 ### Android — sing-box
 
@@ -165,23 +147,45 @@ Notes:
 - `QUERY_ALL_PACKAGES` is required only if you use Per-App Proxy.
 - Keep `android:permission="android.permission.BIND_VPN_SERVICE"` on `VPNService`.
 
-3. Enable multidex in `android/app/build.gradle.kts`:
+3. Add required Gradle settings in `android/app/build.gradle` (Groovy) or `android/app/build.gradle.kts` (Kotlin DSL).
 
-```kotlin
-android {
-    defaultConfig {
-        multiDexEnabled = true
-    }
-}
-```
-
-If you use Groovy (`build.gradle`):
+For **Groovy** (`build.gradle`):
 
 ```groovy
 android {
     defaultConfig {
         multiDexEnabled true
     }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+}
+
+dependencies {
+    // Required when you use Xray-core and put libv2ray.aar in android/app/libs
+    implementation fileTree(dir: 'libs', include: ['*.aar'])
+}
+```
+
+For **Kotlin DSL** (`build.gradle.kts`):
+
+```kotlin
+android {
+    defaultConfig {
+        multiDexEnabled = true
+    }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+}
+
+dependencies {
+    // Required when you use Xray-core and put libv2ray.aar in android/app/libs
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
 }
 ```
 
