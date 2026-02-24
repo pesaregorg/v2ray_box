@@ -1,3 +1,13 @@
+## 1.0.5 - 2026-02-24
+
+* Android: aligned service start/stop lifecycle with v2rayNG behavior to reduce first-connect no-traffic states.
+* Android: improved disconnect responsiveness by closing TUN immediately on stop/error/destroy paths.
+* Android: improved core shutdown handling (`shutdown` callback + `Core stopped` status) to avoid stale connected state.
+* Android: improved ping cancellation/timeout reliability for single and batch tests with safer executor lifecycle handling.
+* Android: added VPN underlying-network callback handling for more stable traffic routing.
+* Example (Android): improved group ping UI update consistency when duplicated links exist.
+* Docs: fixed broken Android `libv2ray.aar` tutorial link to `https://github.com/2dust/AndroidLibXrayLite/releases` (Fix Link #1).
+
 ## 1.0.4 - 2026-02-23
 
 * Android: fixed stale ping loading state after app background/close; ping sessions are now canceled reliably and transient loading states are not persisted.

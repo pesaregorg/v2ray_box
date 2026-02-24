@@ -3,7 +3,7 @@ description: >-
   A Flutter plugin for VPN connectivity with dual-core support (Xray-core & sing-box).
   Supports VLESS, VMess, Trojan, Shadowsocks, Hysteria, TUIC, WireGuard and more.
   Switch between cores at runtime.
-version: 1.0.4
+version: 1.0.5
 homepage: https://github.com/pesaregorg/v2ray_box
 repository: https://github.com/pesaregorg/v2ray_box
 issue_tracker: https://github.com/pesaregorg/v2ray_box/issues

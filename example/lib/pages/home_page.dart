@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -402,8 +401,17 @@ class _HomePageState extends State<HomePage>
       final latency = (r['latency'] as num?)?.toInt() ?? -1;
       if (link != null && mounted) {
         setState(() {
-          final idx = _configs.indexWhere((c) => c.link == link);
-          if (idx >= 0) _configs[idx].ping = latency;
+          var updated = false;
+          for (final cfg in _configs) {
+            if (cfg.link == link) {
+              cfg.ping = latency;
+              updated = true;
+            }
+          }
+          if (!updated) {
+            final idx = _configs.indexWhere((c) => c.link == link);
+            if (idx >= 0) _configs[idx].ping = latency;
+          }
         });
       }
     });

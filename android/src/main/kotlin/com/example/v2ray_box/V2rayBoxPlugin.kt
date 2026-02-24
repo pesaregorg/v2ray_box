@@ -61,6 +61,9 @@ import java.util.LinkedList
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 class V2rayBoxPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
@@ -133,8 +136,11 @@ class V2rayBoxPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         private const val LOGS_CHANNEL = "v2ray_box/logs"
         private const val DEFAULT_PING_TIMEOUT_MS = 7000
         private const val MIN_PING_TIMEOUT_MS = 1000
+        private const val MAX_PING_TIMEOUT_MS = 30000
         private const val PING_TASK_GRACE_MS = 1200L
         private const val PING_MAX_PARALLEL_TASKS = 4
+        private const val PING_EXECUTOR_DRAIN_WAIT_MS = 200L
+        private const val SERVICE_RESTART_SETTLE_MS = 400L
 
         const val VPN_PERMISSION_REQUEST_CODE = 1001
         const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1010
@@ -480,6 +486,7 @@ class V2rayBoxPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                             Log.w(TAG, "start requested while service is active, restarting service")
                             BoxService.stop(context)
                             waitForServiceStopped()
+                            delay(SERVICE_RESTART_SETTLE_MS)
                         }
                         startService()
                         success(true)
@@ -561,6 +568,7 @@ class V2rayBoxPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                         }
                         BoxService.stop(context)
                         waitForServiceStopped()
+                        delay(SERVICE_RESTART_SETTLE_MS)
                         startService()
                         success(true)
                     }
@@ -777,6 +785,7 @@ class V2rayBoxPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                             Log.d(TAG, "Stopping service before switching core to $engine")
                             BoxService.stop(context)
                             waitForServiceStopped()
+                            delay(SERVICE_RESTART_SETTLE_MS)
                         }
                         if (SingboxProcess.isRunning || SingboxProcess.isProcessAlive) {
                             Log.d(TAG, "Stopping stale sing-box process before core switch")
@@ -833,6 +842,7 @@ class V2rayBoxPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                             Log.w(TAG, "start_with_json requested while service is active, restarting service")
                             BoxService.stop(context)
                             waitForServiceStopped()
+                            delay(SERVICE_RESTART_SETTLE_MS)
                         }
                         startService()
                         success(true)
@@ -1085,6 +1095,9 @@ class V2rayBoxPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         snapshot.forEach { executor ->
             try {
                 executor.shutdownNow()
+                runCatching {
+                    executor.awaitTermination(PING_EXECUTOR_DRAIN_WAIT_MS, TimeUnit.MILLISECONDS)
+                }
             } catch (_: Exception) {
             } finally {
                 pingExecutors.remove(executor)
@@ -1098,6 +1111,21 @@ class V2rayBoxPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
 
     private fun unregisterPingExecutor(executor: ExecutorService) {
         pingExecutors.remove(executor)
+    }
+
+    private fun newPingExecutor(threadCount: Int, namePrefix: String): ExecutorService {
+        val counter = AtomicInteger(0)
+        val factory = java.util.concurrent.ThreadFactory { runnable ->
+            Thread(runnable, "$namePrefix-${counter.incrementAndGet()}").apply {
+                isDaemon = true
+                priority = Thread.NORM_PRIORITY
+            }
+        }
+        return if (threadCount <= 1) {
+            java.util.concurrent.Executors.newSingleThreadExecutor(factory)
+        } else {
+            java.util.concurrent.Executors.newFixedThreadPool(threadCount, factory)
+        }
     }
 
     private fun isPingSessionActive(sessionId: Long): Boolean = pingSessionId.get() == sessionId
@@ -1161,48 +1189,68 @@ class V2rayBoxPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
 
         val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
         val threadCount = minOf(parsed.size, PING_MAX_PARALLEL_TASKS)
-        val executor = java.util.concurrent.Executors.newFixedThreadPool(threadCount)
+        val executor = newPingExecutor(threadCount, "v2ray-ping-batch")
         registerPingExecutor(executor)
         val latch = java.util.concurrent.CountDownLatch(parsed.size)
         val batches = (parsed.size + threadCount - 1) / threadCount
         val waitTimeoutMs = (batches.toLong() * (effectiveTimeout.toLong() + PING_TASK_GRACE_MS)) + 4000L
 
         parsed.forEach { entry ->
-            executor.submit {
-                try {
-                    if (!isPingSessionActive(sessionId)) {
-                        results.putIfAbsent(entry.link, -1L)
-                        return@submit
-                    }
-                    val config = buildPingMeasureConfig(entry.outbound)
-                    val measured = measureOutboundDelayWithTimeout(
-                        config,
-                        Settings.pingTestUrl,
-                        effectiveTimeout,
-                        sessionId
-                    )
-                    if (!isPingSessionActive(sessionId)) {
-                        results.putIfAbsent(entry.link, -1L)
-                        return@submit
-                    }
-                    val elapsed = normalizeDelayValue(measured)
-                    results[entry.link] = elapsed
-                    mainHandler.post {
-                        if (isPingSessionActive(sessionId)) {
-                            pingEventSink?.success(mapOf("link" to entry.link, "latency" to elapsed))
+            try {
+                executor.submit {
+                    try {
+                        if (!isPingSessionActive(sessionId)) {
+                            results.putIfAbsent(entry.link, -1L)
+                            return@submit
                         }
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Ping failed for ${entry.link}: ${e.message}")
-                    results[entry.link] = -1L
-                    mainHandler.post {
-                        if (isPingSessionActive(sessionId)) {
-                            pingEventSink?.success(mapOf("link" to entry.link, "latency" to -1L))
+                        val config = buildPingMeasureConfig(entry.outbound)
+                        val measured = measureOutboundDelayWithTimeout(
+                            config,
+                            Settings.pingTestUrl,
+                            effectiveTimeout,
+                            sessionId
+                        )
+                        if (!isPingSessionActive(sessionId)) {
+                            results.putIfAbsent(entry.link, -1L)
+                            return@submit
                         }
+                        val elapsed = normalizeDelayValue(measured)
+                        results[entry.link] = elapsed
+                        mainHandler.post {
+                            if (isPingSessionActive(sessionId)) {
+                                pingEventSink?.success(mapOf("link" to entry.link, "latency" to elapsed))
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Ping failed for ${entry.link}: ${e.message}")
+                        results[entry.link] = -1L
+                        mainHandler.post {
+                            if (isPingSessionActive(sessionId)) {
+                                pingEventSink?.success(mapOf("link" to entry.link, "latency" to -1L))
+                            }
+                        }
+                    } finally {
+                        latch.countDown()
                     }
-                } finally {
-                    latch.countDown()
                 }
+            } catch (e: RejectedExecutionException) {
+                Log.w(TAG, "Ping task rejected for ${entry.link}: ${e.message}")
+                results[entry.link] = -1L
+                mainHandler.post {
+                    if (isPingSessionActive(sessionId)) {
+                        pingEventSink?.success(mapOf("link" to entry.link, "latency" to -1L))
+                    }
+                }
+                latch.countDown()
+            } catch (e: Exception) {
+                Log.w(TAG, "Unexpected ping submit error for ${entry.link}: ${e.message}")
+                results[entry.link] = -1L
+                mainHandler.post {
+                    if (isPingSessionActive(sessionId)) {
+                        pingEventSink?.success(mapOf("link" to entry.link, "latency" to -1L))
+                    }
+                }
+                latch.countDown()
             }
         }
 
@@ -1219,6 +1267,9 @@ class V2rayBoxPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             Log.d(TAG, "Parallel ping cancelled")
         }
         executor.shutdownNow()
+        runCatching {
+            executor.awaitTermination(PING_EXECUTOR_DRAIN_WAIT_MS, TimeUnit.MILLISECONDS)
+        }
         unregisterPingExecutor(executor)
 
         // Ensure caller always receives a result for each input link.
@@ -1249,7 +1300,7 @@ class V2rayBoxPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
 
     private fun parsePingTimeout(value: Any?): Int {
         val timeout = (value as? Number)?.toInt() ?: DEFAULT_PING_TIMEOUT_MS
-        return timeout.coerceAtLeast(MIN_PING_TIMEOUT_MS)
+        return timeout.coerceIn(MIN_PING_TIMEOUT_MS, MAX_PING_TIMEOUT_MS)
     }
 
     private fun measureOutboundDelayWithTimeout(
@@ -1259,7 +1310,7 @@ class V2rayBoxPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         sessionId: Long
     ): Long {
         if (!isPingSessionActive(sessionId)) return -1L
-        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val executor = newPingExecutor(1, "v2ray-ping-single")
         registerPingExecutor(executor)
         val future = executor.submit<Long> {
             measureOutboundDelay(configJson, testUrl)
@@ -1275,6 +1326,9 @@ class V2rayBoxPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         } finally {
             future.cancel(true)
             executor.shutdownNow()
+            runCatching {
+                executor.awaitTermination(PING_EXECUTOR_DRAIN_WAIT_MS, TimeUnit.MILLISECONDS)
+            }
             unregisterPingExecutor(executor)
         }
     }

@@ -11,5 +11,8 @@ class ProxyService : Service(), PlatformInterfaceWrapper {
         service.onStartCommand(intent, flags, startId)
 
     override fun onBind(intent: Intent) = service.onBind(intent)
-    override fun onDestroy() = service.onDestroy()
+    override fun onDestroy() {
+        service.onDestroy()
+        super.onDestroy()
+    }
 }

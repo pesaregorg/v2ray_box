@@ -4,6 +4,10 @@ import android.util.Log
 import com.example.v2ray_box.Settings
 import android.content.Intent
 import android.content.pm.PackageManager.NameNotFoundException
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
@@ -25,6 +29,27 @@ class VPNService : VpnService(), PlatformInterfaceWrapper {
 
     private val service = BoxService(this, this)
     private var tunPfd: ParcelFileDescriptor? = null
+    private val connectivity by lazy { getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager }
+    private val defaultNetworkRequest by lazy {
+        NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+            .build()
+    }
+    private val defaultNetworkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            runCatching { setUnderlyingNetworks(arrayOf(network)) }
+        }
+
+        override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+            runCatching { setUnderlyingNetworks(arrayOf(network)) }
+        }
+
+        override fun onLost(network: Network) {
+            runCatching { setUnderlyingNetworks(null) }
+        }
+    }
+    private var defaultNetworkCallbackRegistered = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int) =
         service.onStartCommand(intent, flags, startId)
@@ -38,7 +63,9 @@ class VPNService : VpnService(), PlatformInterfaceWrapper {
     }
 
     override fun onDestroy() {
+        unregisterDefaultNetworkCallback()
         service.onDestroy()
+        super.onDestroy()
     }
 
     override fun onRevoke() {
@@ -47,6 +74,8 @@ class VPNService : VpnService(), PlatformInterfaceWrapper {
                 service.onRevoke()
             }
         }
+        unregisterDefaultNetworkCallback()
+        super.onRevoke()
     }
 
     override fun autoDetectInterfaceControl(fd: Int) {
@@ -106,6 +135,7 @@ class VPNService : VpnService(), PlatformInterfaceWrapper {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             builder.setMetered(false)
         }
+        registerDefaultNetworkCallback()
 
         if (Settings.perAppProxyEnabled) {
             val appList = Settings.perAppProxyList
@@ -132,6 +162,7 @@ class VPNService : VpnService(), PlatformInterfaceWrapper {
     }
 
     override fun closeTun() {
+        unregisterDefaultNetworkCallback()
         tunPfd?.let {
             try {
                 it.close()
@@ -141,5 +172,36 @@ class VPNService : VpnService(), PlatformInterfaceWrapper {
             tunPfd = null
         }
         service.fileDescriptor = null
+    }
+
+    private fun registerDefaultNetworkCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            return
+        }
+        if (defaultNetworkCallbackRegistered) {
+            return
+        }
+        try {
+            connectivity.requestNetwork(defaultNetworkRequest, defaultNetworkCallback)
+            defaultNetworkCallbackRegistered = true
+        } catch (e: Exception) {
+            Log.w(TAG, "Unable to register default network callback", e)
+        }
+    }
+
+    private fun unregisterDefaultNetworkCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            return
+        }
+        if (!defaultNetworkCallbackRegistered) {
+            return
+        }
+        try {
+            connectivity.unregisterNetworkCallback(defaultNetworkCallback)
+        } catch (_: Exception) {
+        } finally {
+            defaultNetworkCallbackRegistered = false
+            runCatching { setUnderlyingNetworks(null) }
+        }
     }
 }

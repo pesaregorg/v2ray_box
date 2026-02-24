@@ -79,6 +79,9 @@ class ServiceConnection(
             service?.unregisterCallback(callback)
         } catch (e: RemoteException) {
             Log.e(TAG, "cleanup service connection", e)
+        } finally {
+            service = null
+            callback.onServiceStatusChanged(Status.Stopped.ordinal)
         }
     }
 
@@ -109,4 +112,3 @@ class ServiceConnection(
             callback.onServiceResetLogs(messages)
     }
 }
-

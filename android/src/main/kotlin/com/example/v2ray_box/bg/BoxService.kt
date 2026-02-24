@@ -6,7 +6,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
 import android.util.Log
@@ -214,6 +216,7 @@ class BoxService(
     private val status = MutableLiveData(Status.Stopped)
     private val binder = ServiceBinder(status)
     private val notification = ServiceNotification(status, service)
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var receiverRegistered = false
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -234,6 +237,10 @@ class BoxService(
     @Suppress("DEPRECATION")
     private suspend fun startService() {
         try {
+            if (coreController != null || SingboxProcess.isRunning || SingboxProcess.isProcessAlive) {
+                Log.w(TAG, "Detected stale core state before start, forcing cleanup")
+                stopCore(async = false, closeTun = true)
+            }
             Log.d(TAG, "starting service (engine: ${Settings.coreEngine})")
             withContext(Dispatchers.Main) {
                 notification.show(activeProfileName, "Starting...")
@@ -377,45 +384,63 @@ class BoxService(
         notification.close()
         status.postValue(Status.Starting)
 
-        stopCore()
+        stopCore(async = false, closeTun = true)
 
         runBlocking {
+            DefaultNetworkMonitor.stop()
             startService()
         }
     }
 
-    private fun stopCore() {
-        // Tear down TUN first so VPN traffic stops immediately from user perspective.
-        platformInterface.closeTun()
-        fileDescriptor = null
-
+    private fun stopCore(async: Boolean = true, closeTun: Boolean = true) {
         val controller = coreController
         coreController = null
         CommandClient.activeCoreController = null
 
-        try {
-            if (controller != null) {
+        if (controller != null) {
+            val stopRunner = {
+                try {
+                    controller.stopLoop()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error stopping xray core", e)
+                }
+            }
+            if (async) {
                 val stopThread = Thread({
                     try {
-                        controller.stopLoop()
+                        stopRunner()
                     } catch (e: Exception) {
-                        Log.w(TAG, "Error stopping xray core", e)
+                        Log.w(TAG, "Error in async xray stop thread", e)
                     }
                 }, "xray-stop-thread")
                 stopThread.isDaemon = true
                 stopThread.start()
-                stopThread.join(1500L)
-                if (stopThread.isAlive) {
-                    Log.w(TAG, "Timed out waiting for xray core stop; continuing shutdown")
-                }
+            } else {
+                stopRunner()
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error stopping core", e)
         }
 
         if (SingboxProcess.isRunning || SingboxProcess.isProcessAlive) {
-            SingboxProcess.stop()
-            Log.d(TAG, "sing-box process stopped")
+            if (async) {
+                val stopThread = Thread({
+                    try {
+                        SingboxProcess.stop()
+                        Log.d(TAG, "sing-box process stopped")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error stopping sing-box process", e)
+                    }
+                }, "singbox-stop-thread")
+                stopThread.isDaemon = true
+                stopThread.start()
+            } else {
+                SingboxProcess.stop()
+                Log.d(TAG, "sing-box process stopped")
+            }
+        }
+
+        if (closeTun) {
+            platformInterface.closeTun()
+            fileDescriptor = null
         }
     }
 
@@ -444,27 +469,33 @@ class BoxService(
 
     @Suppress("DEPRECATION")
     private fun stopService() {
-        if (status.value == Status.Stopped) return
+        if (status.value == Status.Stopped || status.value == Status.Stopping) return
         status.value = Status.Stopping
         if (receiverRegistered) {
             service.unregisterReceiver(receiver)
             receiverRegistered = false
         }
         notification.close()
+        // Keep stop path fast like v2rayNG: request service stop early, then tear down cores asynchronously.
+        service.stopSelf()
+        // Close TUN immediately so Android removes VPN key icon as soon as possible.
+        platformInterface.closeTun()
+        fileDescriptor = null
         GlobalScope.launch(Dispatchers.IO) {
-            stopCore()
+            stopCore(async = true, closeTun = false)
             DefaultNetworkMonitor.stop()
 
             Settings.startedByUser = false
-            withContext(Dispatchers.Main) {
-                status.value = Status.Stopped
-                service.stopSelf()
-            }
+            status.postValue(Status.Stopped)
         }
     }
 
     private suspend fun stopAndAlert(type: Alert, message: String? = null) {
         Settings.startedByUser = false
+        platformInterface.closeTun()
+        fileDescriptor = null
+        stopCore(async = true, closeTun = false)
+        DefaultNetworkMonitor.stop()
         withContext(Dispatchers.Main) {
             if (receiverRegistered) {
                 service.unregisterReceiver(receiver)
@@ -475,6 +506,7 @@ class BoxService(
                 callback.onServiceAlert(type.ordinal, message)
             }
             status.value = Status.Stopped
+            service.stopSelf()
         }
     }
 
@@ -507,6 +539,18 @@ class BoxService(
     }
 
     fun onDestroy() {
+        if (receiverRegistered) {
+            runCatching { service.unregisterReceiver(receiver) }
+            receiverRegistered = false
+        }
+        notification.close()
+        platformInterface.closeTun()
+        fileDescriptor = null
+        stopCore(async = true, closeTun = false)
+        GlobalScope.launch(Dispatchers.IO) {
+            DefaultNetworkMonitor.stop()
+        }
+        status.postValue(Status.Stopped)
         binder.close()
     }
 
@@ -523,6 +567,9 @@ class BoxService(
 
     override fun shutdown(): Long {
         Log.d(TAG, "CoreCallbackHandler: shutdown")
+        mainHandler.post {
+            stopService()
+        }
         return 0
     }
 
@@ -530,6 +577,11 @@ class BoxService(
         Log.d(TAG, "CoreCallbackHandler: onEmitStatus status=$status, msg=$message")
         binder.broadcast {
             it.onServiceWriteLog(message ?: "")
+        }
+        if (message?.contains("core stopped", ignoreCase = true) == true) {
+            mainHandler.post {
+                stopService()
+            }
         }
         return 0
     }

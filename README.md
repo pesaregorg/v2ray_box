@@ -39,7 +39,7 @@ dependencies:
 
 ### Android — Xray-core
 
-1. Download `libv2ray.aar` from [AndroidLibXrayLite releases](https://github.com/nickolasgasworking/AndroidLibXrayLite/releases)
+1. Download `libv2ray.aar` from [AndroidLibXrayLite releases](https://github.com/2dust/AndroidLibXrayLite/releases)
 2. Place in your app's `android/app/libs/`:
 
 ```
@@ -605,4 +605,4 @@ await v2rayBox.setCoreEngine('singbox');
 
 - [Xray-core](https://github.com/XTLS/Xray-core)
 - [sing-box](https://github.com/SagerNet/sing-box)
-- [AndroidLibXrayLite](https://github.com/nickolasgasworking/AndroidLibXrayLite)
+- [AndroidLibXrayLite](https://github.com/2dust/AndroidLibXrayLite/releases)
