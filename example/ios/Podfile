@@ -10,17 +10,21 @@ project 'Runner', {
   'Release' => :release,
 }
 
-# Symlink Libbox.xcframework from app's Frameworks/ to plugin's expected location.
+# Symlink core xcframeworks from app's Frameworks/ to plugin's expected location.
 # This runs before CocoaPods resolves dependencies, so vendored_frameworks validation passes.
 require 'fileutils'
-app_fw = File.expand_path('Frameworks/Libbox.xcframework', __dir__)
 plugin_fw_dir = File.expand_path('../../ios/Frameworks', __dir__)
-plugin_fw = File.join(plugin_fw_dir, 'Libbox.xcframework')
-
-if File.exist?(app_fw) && !File.exist?(plugin_fw)
-  FileUtils.mkdir_p(plugin_fw_dir)
-  FileUtils.ln_sf(app_fw, plugin_fw)
-  puts "Symlinked Libbox.xcframework to plugin's Frameworks/"
+{
+  'Libbox.xcframework' => 'Libbox.xcframework',
+  'LibXray.xcframework' => 'LibXray.xcframework',
+}.each do |app_name, plugin_name|
+  app_fw = File.expand_path("Frameworks/#{app_name}", __dir__)
+  plugin_fw = File.join(plugin_fw_dir, plugin_name)
+  if File.exist?(app_fw) && !File.exist?(plugin_fw)
+    FileUtils.mkdir_p(plugin_fw_dir)
+    FileUtils.ln_sf(app_fw, plugin_fw)
+    puts "Symlinked #{app_name} to plugin's Frameworks/"
+  end
 end
 
 def flutter_root

@@ -36,6 +36,7 @@ dependencies:
 ## Platform Setup
 
 > **Important:** Core files are not bundled with this package. Build them with the scripts below in your app project.
+> Manual copy flow for iOS core files is deprecated in this package README.
 
 ### Android Core Build (Script-Based)
 
@@ -55,6 +56,27 @@ Output paths:
 
 - Android Xray: `android/app/libs/libxray.aar`
 - Android sing-box: `android/app/src/main/jniLibs/<abi>/libsingbox.so`
+
+For command usage, flags, and ready-to-run examples, see [`example/scripts/README.md`](example/scripts/README.md).
+
+### iOS Core Build (Script-Based)
+
+For iOS apps using this package, build cores with these scripts:
+
+1. Copy `example/scripts/build_ios_libxray.sh` and/or `example/scripts/build_ios_libsingbox.sh` into your app repo (for example: `scripts/`)
+2. Run from app root (or pass `--project-root`)
+
+Example:
+
+```bash
+bash ./scripts/build_ios_libxray.sh
+bash ./scripts/build_ios_libsingbox.sh
+```
+
+Output paths:
+
+- iOS Xray: `ios/Frameworks/LibXray.xcframework`
+- iOS sing-box: `ios/Frameworks/Libbox.xcframework`
 
 For command usage, flags, and ready-to-run examples, see [`example/scripts/README.md`](example/scripts/README.md).
 
@@ -159,9 +181,30 @@ Notes:
 
 ### iOS Notes
 
-- Default PacketTunnel path in this package is sing-box via `Libbox.xcframework`.
-- iOS Xray requires custom PacketTunnel integration with `LibXray.xcframework`.
+- PacketTunnel in this package supports both cores:
+  - sing-box via `Libbox.xcframework`
+  - Xray via `LibXray.xcframework`
 - Minimum version: iOS 15.0+.
+- Real VPN test must run on a physical iPhone (VPN is not supported on iOS Simulator).
+
+### iOS — Xcode & CocoaPods Setup
+
+After building iOS cores with scripts:
+
+1. Update CocoaPods (recommended: `1.16.2`) and run:
+
+```bash
+cd example/ios
+pod install
+```
+
+2. Open `Runner.xcworkspace` (not `Runner.xcodeproj`).
+3. In target `PacketTunnel`, verify these frameworks are linked:
+   - `Libbox.xcframework`
+   - `LibXray.xcframework`
+   - `NetworkExtension.framework`
+   - `UIKit.framework`
+4. Test real VPN behavior on a physical iPhone.
 
 ### macOS Notes
 
@@ -317,7 +360,7 @@ On iOS, the VPN runs as a PacketTunnel Network Extension:
 
 1. The main app generates the config JSON (sing-box or Xray format) and passes it to the PacketTunnel extension
 2. The PacketTunnel extension receives the config + core engine type via VPN tunnel options
-3. The extension uses `Libbox.xcframework` for sing-box. For Xray, you need custom `LibXray.xcframework` integration in PacketTunnel.
+3. The extension uses `Libbox.xcframework` for sing-box and `LibXray.xcframework` for Xray
 4. All device traffic is routed through the tunnel interface
 
 ### How macOS Proxy Works
@@ -453,8 +496,8 @@ If you want a smaller app, you can ship only one of the two cores on any platfor
 - **sing-box only** — Keep only `libsingbox.so` in `jniLibs/` and remove `android/app/libs/libxray.aar`.
 
 **iOS:**
-- **sing-box only** — Only include `Libbox.xcframework`.
-- **Xray-core only** — Use a custom PacketTunnel path with `LibXray.xcframework`.
+- **sing-box only** — Keep `ios/Frameworks/Libbox.xcframework`, remove `ios/Frameworks/LibXray.xcframework`, and remove `LibXray.xcframework` from `PacketTunnel` linked frameworks.
+- **Xray-core only** — Keep `ios/Frameworks/LibXray.xcframework`, remove `ios/Frameworks/Libbox.xcframework`, and remove `Libbox.xcframework` from `PacketTunnel` linked frameworks.
 
 **macOS:**
 - Only place the binary you need (`sing-box` or `xray`) in `macos/Frameworks/`.

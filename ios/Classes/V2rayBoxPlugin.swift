@@ -54,6 +54,8 @@ public class V2rayBoxPlugin: NSObject, FlutterPlugin {
     
     private var lastSingboxUpload: Int64 = 0
     private var lastSingboxDownload: Int64 = 0
+    private var lastXrayUpload: Int64 = 0
+    private var lastXrayDownload: Int64 = 0
     
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(name: "v2ray_box", binaryMessenger: registrar.messenger())
@@ -283,7 +285,24 @@ public class V2rayBoxPlugin: NSObject, FlutterPlugin {
             
         case "get_core_info":
             if coreEngine == "xray" {
-                result(["engine": "xray", "core": "xray-core", "version": ""] as [String: Any])
+                var info: [String: Any] = ["engine": "xray", "core": "xray-core"]
+                if let session = tunnelManager?.connection as? NETunnelProviderSession,
+                   tunnelManager?.connection.status == .connected {
+                    do {
+                        try session.sendProviderMessage("xray_version".data(using: .utf8)!) { response in
+                            if let response,
+                               let version = String(data: response, encoding: .utf8),
+                               !version.isEmpty {
+                                info["version"] = version
+                            }
+                            result(info)
+                        }
+                        return
+                    } catch {
+                        // fall back to basic core info without version
+                    }
+                }
+                result(info)
             } else {
                 var info: [String: Any] = ["engine": "singbox", "core": "sing-box"]
                 let version = LibboxVersion()
@@ -432,18 +451,14 @@ public class V2rayBoxPlugin: NSObject, FlutterPlugin {
                 try fileManager.createDirectory(at: workingDir, withIntermediateDirectories: true)
                 try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
                 
-                let opts = MobileSetupOptions()
+                let opts = LibboxSetupOptions()
                 opts.basePath = baseDir.path
-                opts.workingDir = workingDir.path
-                opts.tempDir = tempDir.path
-                opts.listen = ""
-                opts.secret = ""
-                opts.debug = false
-                opts.mode = 0
-                opts.fixAndroidStack = false
+                opts.workingPath = workingDir.path
+                opts.tempPath = tempDir.path
+                opts.debug = debugMode
                 
                 var error: NSError?
-                MobileSetup(opts, nil, &error)
+                LibboxSetup(opts, &error)
                 
                 if let error = error {
                     await MainActor.run {
@@ -565,7 +580,7 @@ public class V2rayBoxPlugin: NSObject, FlutterPlugin {
                 let config: String
                 do {
                     if coreEngine == "xray" {
-                        config = try xrayConfigBuilder.buildConfig(from: link)
+                        config = try xrayConfigBuilder.buildConfig(from: link, proxyOnly: true)
                     } else {
                         config = try singboxConfigBuilder.buildConfig(from: link)
                     }
@@ -970,12 +985,18 @@ public class V2rayBoxPlugin: NSObject, FlutterPlugin {
                       let upload = Int64(components[0]),
                       let download = Int64(components[1]) else { return }
                 
+                guard let self = self else { return }
+                let upPerSec = max(0, upload - self.lastXrayUpload)
+                let downPerSec = max(0, download - self.lastXrayDownload)
+                self.lastXrayUpload = upload
+                self.lastXrayDownload = download
+                
                 DispatchQueue.main.async {
-                    self?.statsEventSink?([
+                    self.statsEventSink?([
                         "connections-in": 0,
                         "connections-out": 0,
-                        "uplink": upload,
-                        "downlink": download,
+                        "uplink": upPerSec,
+                        "downlink": downPerSec,
                         "uplink-total": upload,
                         "downlink-total": download
                     ])
